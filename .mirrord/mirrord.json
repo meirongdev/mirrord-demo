@@ -1,0 +1,16 @@
+{
+  "target": {
+    "namespace": "mirrord-demo",
+    "path": "deployment/mirrord-demo"
+  },
+  "feature": {
+    "network": {
+      "incoming": {
+        "mode": "steal",
+        "http_filter": {
+          "header_filter": "^x-mirrord-mode: steal$"
+        }
+      }
+    }
+  }
+}

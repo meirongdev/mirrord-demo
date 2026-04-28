@@ -73,7 +73,8 @@ Dockerfile.boot
 .DS_Store
 
 # mirrord
-.mirrord/
+/.mirrord/*
+!/.mirrord/mirrord.json
 
 # Local development
 !/.mvn/wrapper/maven-wrapper.properties
