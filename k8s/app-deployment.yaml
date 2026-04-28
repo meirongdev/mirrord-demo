@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mirrord-demo
+  namespace: mirrord-demo
+spec:
+  type: NodePort
+  selector:
+    app: mirrord-demo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mirrord-demo
+  namespace: mirrord-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mirrord-demo
+  template:
+    metadata:
+      labels:
+        app: mirrord-demo
+    spec:
+      containers:
+        - name: app
+          image: mirrord-demo:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DEMO_APP_INSTANCE
+              value: cluster
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://mysql.mirrord-demo.svc.cluster.local:3306/mirrord_demo?createDatabaseIfNotExist=true&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true
+            - name: SPRING_DATASOURCE_USERNAME
+              value: demo
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: demo
+            - name: SPRING_SQL_INIT_MODE
+              value: always
+          readinessProbe:
+            httpGet:
+              path: /api/messages/current
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/messages/current
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10

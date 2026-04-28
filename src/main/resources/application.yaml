@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: mirrord-demo
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql.mirrord-demo.svc.cluster.local:3306/mirrord_demo?createDatabaseIfNotExist=true&serverTimezone=UTC}
+    username: ${SPRING_DATASOURCE_USERNAME:demo}
+    password: ${SPRING_DATASOURCE_PASSWORD:demo}
+  sql:
+    init:
+      mode: ${SPRING_SQL_INIT_MODE:always}
+
+demo:
+  app-instance: ${DEMO_APP_INSTANCE:cluster}
