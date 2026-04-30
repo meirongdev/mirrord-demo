@@ -54,8 +54,22 @@ What the demo proves:
 
 ```bash
 make deploy    # build image → load into kind → deploy MySQL + app
-make validate  # run end-to-end assertions
+make validate  # run strict end-to-end assertions
 ```
+
+## Latest validation results
+
+Latest verification on 2026-04-29:
+
+1. `mvn -q test package` passed.
+2. `bash scripts/validate-demo.sh` passed 10 consecutive runs on the repo's default kind setup.
+3. `make validate` now waits for the `x-mirrord-mode: steal` request to be handled by the local process and fails if that handoff never happens.
+
+最新一次验证（2026-04-29）：
+
+1. `mvn -q test package` 通过。
+2. `bash scripts/validate-demo.sh` 在本仓库默认 kind 环境下连续 10 次通过。
+3. `make validate` 现在会持续等待带 `x-mirrord-mode: steal` 的请求被本地进程处理；如果一直没有切到本地，会直接失败。
 
 ## Local debug flow
 
@@ -91,7 +105,7 @@ make help        Show available targets
 make build       Compile and test (produces target/*.jar)
 make deploy      Create kind cluster + build image + deploy k8s resources
 make run-local   Run app locally with mirrord
-make validate    Run end-to-end validation
+make validate    Run strict end-to-end validation
 make status      Show pod status in the demo namespace
 make clean       Delete the kind cluster
 ```

@@ -37,10 +37,9 @@ wait_for_command \
 after_local_update="$(wait_for_command "cluster read after local write" curl -fsS http://127.0.0.1:18080/api/messages/current)"
 assert_contains "$after_local_update" '"message":"updated through local"'
 
-incoming_attempt="$(wait_for_command "incoming steal attempt" curl -fsS -H 'x-mirrord-mode: steal' http://127.0.0.1:18080/api/messages/current)"
-if [[ "$incoming_attempt" == *'"handledBy":"local"'* ]]; then
-  log "Incoming steal also worked on this cluster"
-else
-  log "Known limitation observed: mirrord incoming steal on kind did not take over the request"
-  log "The demo still verified local debug against the in-cluster MySQL database"
-fi
+wait_for_contains \
+  "incoming steal attempt" \
+  '"handledBy":"local"' \
+  curl -fsS -H 'x-mirrord-mode: steal' http://127.0.0.1:18080/api/messages/current
+
+log "Incoming steal also worked on this cluster"
