@@ -22,7 +22,7 @@ if ! command -v mirrord >/dev/null 2>&1; then
 fi
 
 # Everything after `--` is the local command. Default: a probe curl.
-local_cmd=(curl -sS http://echo.team-a-dev.svc.cluster.local/?msg=hello-from-mirrord)
+local_cmd=(curl -sS http://app.team-a-dev.svc.cluster.local:8080/api/messages/current)
 if [[ "${1:-}" == "--" ]]; then
   shift
   local_cmd=("$@")

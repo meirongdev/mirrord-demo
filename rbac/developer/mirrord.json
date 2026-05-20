@@ -1,8 +1,7 @@
 {
-  "_comment": "Edit target.namespace + target.path to match a namespace your admin granted you. The 'kube_context' must match the context name in your kubeconfig (default: '<user>@mirrord-rbac-demo').",
   "target": {
     "namespace": "team-a-dev",
-    "path": "deployment/echo"
+    "path": "deployment/app"
   },
   "agent": {
     "namespace": "team-a-dev",

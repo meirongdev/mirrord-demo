@@ -1,14 +1,22 @@
+# Namespace: isolated workspace for team A's developers.
+# Pod Security label is set to "privileged" because mirrord-agent
+# runs a container with elevated capabilities (NET_ADMIN for traffic
+# manipulation, SYS_PTRACE for process introspection). Without this
+# label, the PodSecurity admission controller would reject the pod.
+# In production, only dev namespaces would need this label; prod would
+# stay at "restricted" or "baseline".
 apiVersion: v1
 kind: Namespace
 metadata:
   name: team-a-dev
   labels:
     app.kubernetes.io/part-of: mirrord-rbac-demo
-    # Kind enables PodSecurity admission. mirrord-agent needs NET_ADMIN /
-    # SYS_PTRACE, so we relax the namespace to "privileged".
     pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/enforce-version: latest
 ---
+# Namespace: isolated workspace for team B's developers.
+# Each namespace is independent — a developer bound only to team-a-dev
+# has zero RBAC permission to list pods or create agents in team-b-dev.
 apiVersion: v1
 kind: Namespace
 metadata:

@@ -1,3 +1,7 @@
+# ClusterRole: the *capability* — what operations the mirrord-agent sub-process
+# is allowed to perform once it runs inside a namespace. This Role is never
+# bound directly to a user; it's referenced by per-namespace RoleBindings
+# so that access can be scoped to exactly one namespace at a time.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -5,10 +9,17 @@ metadata:
   labels:
     app.kubernetes.io/part-of: mirrord-rbac-demo
 rules:
-  # Discover targets and their dependencies inside a namespace
+  # ── Discovery: find the workload to mirror ──────────────────────────
+  # mirrord needs to discover the target pod (by Deployment label selector),
+  # resolve in-cluster DNS via Services, and read ConfigMaps / Secrets that
+  # the app may mount (e.g. DB connection strings). Endpoints lets mirrord
+  # see which pod IPs backs each Service.
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "secrets", "endpoints"]
     verbs: ["get", "list", "watch"]
+  # Workloads may be Deployments, StatefulSets, DaemonSets, ReplicaSets, or
+  # Argo Rollouts. mirrord resolves the target path (e.g.
+  # deployment/echo) to a pod through these resources.
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
@@ -16,20 +27,34 @@ rules:
     resources: ["rollouts"]
     verbs: ["get", "list", "watch"]
 
-  # Create / cleanup the mirrord-agent Job (and its pod) inside the target namespace
+  # ── Agent lifecycle: create / delete the mirrord-agent Job ──────────
+  # mirrord works by spawning a sidecar Job in the target namespace. This
+  # Job creates its own pod that intercepts traffic and streams it to the
+  # developer's local process. Read + create + delete are needed for this
+  # lifecycle. "get/list/watch" let mirrord monitor the agent's health.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # The agent Job creates pods directly (bypassing a controller). mirrord
+  # also needs to delete orphaned pods if the Job cleanup fails.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "delete"]
 
-  # Optional: ephemeral container mode (mirrord can attach to an existing pod)
+  # ── Ephemeral container mode (optional, when enabled in mirrord.json) ─
+  # Instead of spawning a new pod, mirrord can attach to an existing pod
+  # using the EphemeralContainers subresource. This avoids privileged pod
+  # creation but requires the update/patch permission on this subresource.
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["update", "patch"]
 
-  # Stream agent logs and tunnel traffic
+  # ── I/O channels: logs and port-forward ─────────────────────────────
+  # The mirrord CLI streams the agent's logs for debugging and uses
+  # port-forward to create a TCP tunnel between the pod and the local
+  # process. Without "pods/log get" developers can't see why the agent
+  # failed to start; without "pods/portforward create" there's no data
+  # path.
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -37,7 +62,20 @@ rules:
     resources: ["pods/portforward"]
     verbs: ["create"]
 
-  # Read events for troubleshooting (e.g. why did the agent fail to schedule)
+  # ── Troubleshooting: watch events ───────────────────────────────────
+  # Kubernetes events explain why scheduling or validation failed
+  # (e.g. "Insufficient cpu", "PodSecurity violation"). mirrord reads
+  # them to produce better error messages for the developer.
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
+
+  # ── Impersonation: connect to the mirrord-agent ─────────────────────
+  # mirrord impersonates the service account of the target pod to
+  # authenticate the WebSocket tunnel between the local process and the
+  # agent pod. Without this permission the connection attempt gets a 403.
+  # "get" is needed to resolve the target pod's SA identity;
+  # "impersonate" is needed to authenticate the tunnel connection.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "impersonate"]
