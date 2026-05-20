@@ -1,0 +1,19 @@
+# Template — one RoleBinding per (developer, namespace) tuple.
+# Substitute __NAMESPACE__ and __USER__ before applying, or use
+# rbac/admin/scripts/grant-namespace-access.sh which envsubst's this file.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mirrord-developer-__USER__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: mirrord-rbac-demo
+    mirrord-rbac-demo/user: __USER__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mirrord-developer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: __USER__

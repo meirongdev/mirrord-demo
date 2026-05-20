@@ -1,7 +1,9 @@
-.PHONY: help build deploy run-local validate status clean
+.PHONY: help build deploy run-local validate status clean \
+        rbac-bootstrap rbac-validate rbac-clean
 
-CLUSTER_NAME := mirrord-demo
-NAMESPACE    := mirrord-demo
+CLUSTER_NAME      := mirrord-demo
+NAMESPACE         := mirrord-demo
+RBAC_CLUSTER_NAME := mirrord-rbac-demo
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,3 +26,13 @@ status: ## Show pod status in the demo namespace
 
 clean: ## Delete the kind cluster and all its resources
 	kind delete cluster --name $(CLUSTER_NAME)
+
+rbac-bootstrap: ## Bootstrap the RBAC demo cluster + apply mirrord-developer ClusterRole + workloads
+	bash rbac/admin/scripts/bootstrap-cluster.sh
+
+rbac-validate: ## Run the RBAC allow/deny end-to-end validation
+	bash rbac/validate-rbac.sh
+
+rbac-clean: ## Delete the RBAC demo kind cluster and issued credentials
+	kind delete cluster --name $(RBAC_CLUSTER_NAME) || true
+	rm -rf rbac/.credentials

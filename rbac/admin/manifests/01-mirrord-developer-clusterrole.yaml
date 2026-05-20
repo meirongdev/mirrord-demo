@@ -1,0 +1,43 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mirrord-developer
+  labels:
+    app.kubernetes.io/part-of: mirrord-rbac-demo
+rules:
+  # Discover targets and their dependencies inside a namespace
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
+    verbs: ["get", "list", "watch"]
+
+  # Create / cleanup the mirrord-agent Job (and its pod) inside the target namespace
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+
+  # Optional: ephemeral container mode (mirrord can attach to an existing pod)
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["update", "patch"]
+
+  # Stream agent logs and tunnel traffic
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+
+  # Read events for troubleshooting (e.g. why did the agent fail to schedule)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]

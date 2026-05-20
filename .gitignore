@@ -78,3 +78,6 @@ Dockerfile.boot
 
 # Local development
 !/.mvn/wrapper/maven-wrapper.properties
+
+# RBAC demo — never commit issued credentials
+/rbac/.credentials/
