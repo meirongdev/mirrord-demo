@@ -1,0 +1,17 @@
+{
+  "target": {
+    "namespace": "team-a-dev",
+    "path": "deployment/app"
+  },
+  "agent": {
+    "namespace": "team-a-dev",
+    "ttl": 30
+  },
+  "feature": {
+    "network": {
+      "incoming": {
+        "mode": "mirror"
+      }
+    }
+  }
+}

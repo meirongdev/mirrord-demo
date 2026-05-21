@@ -51,8 +51,10 @@ out/
 /nbdist/
 /.nb-gradle/
 
-# VS Code
-.vscode/
+# VS Code — ignore by default, but commit the demo's debug + extension configs
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
 
 # Maven
 target/
@@ -72,9 +74,10 @@ Dockerfile.boot
 # macOS
 .DS_Store
 
-# mirrord
+# mirrord — ignore by default, but commit the demo's mirror/steal configs
 /.mirrord/*
-!/.mirrord/mirrord.json
+!/.mirrord/mirror.json
+!/.mirrord/steal.json
 
 # Local development
 !/.mvn/wrapper/maven-wrapper.properties

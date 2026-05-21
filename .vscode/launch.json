@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "mirrord - mirror mode",
+      "request": "launch",
+      "mainClass": "dev.meirong.mirrorddemo.MirrordDemoApplication",
+      "projectName": "mirrord-demo",
+      "env": {
+        "MIRRORD_ACTIVE": "1",
+        "MIRRORD_CONFIG_FILE": "${workspaceFolder}/.mirrord/mirror.json"
+      }
+    },
+    {
+      "type": "java",
+      "name": "mirrord - steal mode",
+      "request": "launch",
+      "mainClass": "dev.meirong.mirrorddemo.MirrordDemoApplication",
+      "projectName": "mirrord-demo",
+      "env": {
+        "MIRRORD_ACTIVE": "1",
+        "MIRRORD_CONFIG_FILE": "${workspaceFolder}/.mirrord/steal.json"
+      }
+    }
+  ]
+}
