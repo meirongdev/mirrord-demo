@@ -33,23 +33,35 @@ lib.sh
 
 ```
 manifests/
-├── 01-mirrord-developer-clusterrole.yaml   ← ClusterRole: defines mirrord-agent permissions
-├── 02-namespaces.yaml                      ← Namespaces: team-a-dev, team-b-dev with PS=privileged
-├── 03-test-workloads.yaml                  ← Echo server: quick smoke-test workload
-├── 04-mysql-template.yaml                  ← MySQL template: Service + Deployment (TEAM placeholder)
-├── 05-app-template.yaml                    ← Spring Boot app template: Deployment + Service (TEAM placeholder)
-└── 04-rolebinding-template.yaml            ← RoleBinding template: binds User → ClusterRole (namespace-scoped)
+├── 01-mirrord-developer-clusterrole.yaml          ← ClusterRole: namespace-scoped mirrord-agent verbs
+├── 01b-mirrord-impersonator-clusterrole.yaml      ← ClusterRole: ONE rule — serviceaccounts get/impersonate
+├── 02-namespaces.yaml                             ← Namespaces: team-a-dev, team-b-dev with PS=privileged
+├── 03-test-workloads.yaml                         ← Echo server: quick smoke-test workload
+├── 04-mysql-template.yaml                         ← MySQL template: Service + Deployment (TEAM placeholder)
+├── 04-rolebinding-template.yaml                   ← RoleBinding template: binds User → mirrord-developer (per-namespace)
+├── 04b-mirrord-impersonator-rolebinding.yaml      ← ClusterRoleBinding template: binds User → mirrord-impersonator (per-user)
+└── 05-app-template.yaml                           ← Spring Boot app template: Deployment + Service (TEAM placeholder)
 ```
+
+**Why two ClusterRoles?** mirrord needs both namespace-scoped verbs (pods,
+jobs, portforward…) and one cluster-scoped verb (`serviceaccounts:
+impersonate`, used during the agent WebSocket handshake). Kubernetes
+doesn't allow expressing a cluster-scoped grant via a `RoleBinding`, so
+the cluster-scoped verb gets its own tiny ClusterRole that's bound via
+a per-user `ClusterRoleBinding`. The wider ClusterRole stays
+namespace-only. See `admin-runbook.md § Why two bindings` for the
+API-server-level mechanics.
 
 **Templates (04-mysql-template.yaml, 05-app-template.yaml):** These files
 use `TEAM` as a placeholder for the namespace name. They are rendered with
 `sed 's/TEAM/<namespace>/g'` before `kubectl apply`. This avoids needing
-`envsubst` as a dependency. The RoleBinding template (04-rolebinding-template.yaml)
-uses `__USER__` and `__NAMESPACE__` placeholders.
+`envsubst` as a dependency. The two binding templates
+(`04-rolebinding-template.yaml`, `04b-mirrord-impersonator-rolebinding.yaml`)
+use `__USER__` (and `__NAMESPACE__` for the namespaced one) as placeholders.
 
-**Template file naming:** `04-mysql-template.yaml` is numbered 04 to slot
-before the rolebinding (04-rolebinding-template.yaml). The script applies
-templates after the fixed manifests (01-03).
+**Template file naming:** the `b` suffix (`01b-`, `04b-`) marks the
+impersonator counterparts to `01-` / `04-`. They're applied in the same
+phase as their parents.
 
 **Idempotency guarantees:**
 
@@ -69,6 +81,9 @@ bootstrap-cluster.sh
 │       └── kubectl apply manifests/02-namespaces.yaml
 │       └── kubectl apply manifests/03-test-workloads.yaml
 │       └── kubectl rollout status (wait for echo pods ready)
+└── kubectl apply manifests/01b-mirrord-impersonator-clusterrole.yaml
+    (cluster-scoped, applied by bootstrap directly so grant-namespace-access.sh
+     can rely on its presence)
 
 issue-developer-kubeconfig.sh
 ├── admin/scripts/lib.sh
@@ -88,25 +103,35 @@ grant-namespace-access.sh
 │   ├── require_cmd(kubectl)
 │   ├── kubectl get namespace (pre-flight check)
 │   ├── sed template substitution (envsubst-lite via sed)
-│   │   └── reads manifests/04-rolebinding-template.yaml
-│   │       replaces __USER__ and __NAMESPACE__
-│   └── kubectl apply -f -   ← render + apply in one pipeline
-│       ↓
-│   └── kubectl auth can-i --as=<user> (verify)
+│   │   ├── reads manifests/04-rolebinding-template.yaml      ← namespace RoleBinding
+│   │   │   replaces __USER__ and __NAMESPACE__
+│   │   └── reads manifests/04b-mirrord-impersonator-rolebinding.yaml ← per-user ClusterRoleBinding
+│   │       replaces __USER__
+│   ├── kubectl apply -f -   ← render + apply each in its own pipeline
+│   └── kubectl auth can-i --as=<user>
+│       ├── list pods -n <ns>             (namespace verb works)
+│       ├── create jobs -n <ns>           (namespace verb works)
+│       └── get serviceaccounts --as=<user> (cluster-scoped check)
 
 revoke-namespace-access.sh
 ├── admin/scripts/lib.sh
 │   ├── require_cmd(kubectl)
 │   ├── kubectl delete rolebinding --ignore-not-found
-│   └── kubectl auth can-i --as=<user> (verify denial)
+│   ├── kubectl get rolebinding -A -l mirrord-rbac-demo/user=<user>
+│   │     ↓ count remaining RoleBindings
+│   │     if 0: kubectl delete clusterrolebinding mirrord-impersonator-<user>
+│   │     else: keep the cluster-scoped binding (other namespaces still need it)
+│   └── kubectl auth can-i --as=<user> (verify ns denial)
 
 validate-rbac.sh
 ├── admin/scripts/lib.sh
 │   ├── bootstrap-cluster.sh              ← step 1/5
 │   ├── issue-developer-kubeconfig.sh     ← step 2/5
 │   ├── grant-namespace-access.sh         ← step 3/5
-│   │   │   assert_allowed()              ← kubectl auth can-i must succeed
-│   │   │   assert_denied()               ← kubectl auth can-i must fail
+│   │   │   assert_allowed()              ← namespace can-i must succeed
+│   │   │   assert_denied()               ← namespace can-i must fail
+│   │   │   assert_allowed_cluster()      ← cluster-scoped can-i must succeed
+│   │   │   assert_denied_cluster()       ← cluster-scoped can-i must fail
 │   │   ├── mirrord ls -n team-a-dev    ← step 4/5 (optional, needs mirrord CLI)
 │   │   ├── mirrord ls -n team-b-dev    ← expects failure
 │   └── revoke-namespace-access.sh        ← step 5/5
@@ -123,9 +148,10 @@ run-mirrord.sh (developer)
 
 ## `bootstrap-cluster.sh`
 
-**Purpose:** One-command setup of the RBAC scaffold (ClusterRole + namespaces
-+ echo workloads). Note: this script does **not** deploy the MySQL or Spring
-Boot app — those are deployed separately (see admin runbook step 5).
+**Purpose:** One-command setup of the RBAC scaffold (both ClusterRoles +
+namespaces + echo workloads). Note: this script does **not** deploy the
+MySQL or Spring Boot app — those are deployed separately (see admin
+runbook step 5).
 
 **Flow:**
 
@@ -136,13 +162,19 @@ Boot app — those are deployed separately (see admin runbook step 5).
    port-mappings or containerd snippets).
 3. **RBAC scaffold:** Call `apply_admin_manifests()`, which applies the
    YAML manifests in order:
-   - `01-mirrord-developer-clusterrole.yaml` — the ClusterRole
+   - `01-mirrord-developer-clusterrole.yaml` — namespace-scoped
+     mirrord-agent verbs
    - `02-namespaces.yaml` — team-a-dev, team-b-dev with
      `pod-security.kubernetes.io/enforce=privileged`
    - `03-test-workloads.yaml` — echo Deployment + Service in each
      namespace
 4. **Wait for readiness:** `kubectl rollout status deployment/echo` for
    each namespace, timeout 120 s.
+5. **Cluster-scoped impersonator:** apply
+   `01b-mirrord-impersonator-clusterrole.yaml`. This is the empty-shell
+   ClusterRole that `grant-namespace-access.sh` later binds via a
+   per-user `ClusterRoleBinding`. Applied here so the grant script can
+   assume it exists.
 
 **Output:** Prints next-steps hints pointing to the developer kubeconfig
 script and the grant script.
@@ -202,46 +234,64 @@ the K8s CSR API — no external CA or OIDC dependency.
 
 ## `grant-namespace-access.sh`
 
-**Purpose:** Create a `RoleBinding` that scopes the ClusterRole to one
-namespace for one user.
+**Purpose:** Grant a developer mirrord access to one namespace. Creates
+two bindings: a namespace-scoped `RoleBinding` (the bulk of the
+permissions) and a per-user `ClusterRoleBinding` (the cluster-scoped
+impersonation verb).
 
 **Flow:**
 
 1. **Pre-flight:** Require `kubectl`. Check the target namespace exists
    (`kubectl get namespace`) — catches typos before they produce a
    silent no-op.
-2. **Render template:** Read `manifests/04-rolebinding-template.yaml`,
-   substitute `__USER__` and `__NAMESPACE__` via `sed` (no `envsubst`
-   dependency). This is a simple string replacement — the template
-   contains exactly two placeholders.
-3. **Apply:** Pipe the rendered YAML into `kubectl apply -f -`.
-4. **Verify:** Run `kubectl auth can-i list pods --as=<user>` and
-   `create jobs --as=<user>` in the target namespace to confirm the
-   binding took effect.
+2. **Render + apply namespace RoleBinding:** Read
+   `manifests/04-rolebinding-template.yaml`, substitute `__USER__` and
+   `__NAMESPACE__` via `sed`, pipe to `kubectl apply -f -`. Binds the
+   user to `ClusterRole/mirrord-developer` inside that namespace.
+3. **Render + apply cluster-scoped ClusterRoleBinding:** Read
+   `manifests/04b-mirrord-impersonator-rolebinding.yaml`, substitute
+   `__USER__`, pipe to `kubectl apply -f -`. Binds the user to
+   `ClusterRole/mirrord-impersonator` (one rule: serviceaccounts
+   get/impersonate). Idempotent — re-runs are no-ops once the binding
+   exists.
+4. **Verify:** Run `kubectl auth can-i` for representative namespace
+   verbs (`list pods`, `create jobs`) and the cluster-scoped check
+   (`get serviceaccounts`, no `-n`). All three must return `yes`.
 
-**Why `sed` instead of `envsubst`?** The script header says "Use a heredoc
-rather than envsubst to avoid an extra dependency." The grant script
-actually uses `sed` (consistent choice). The comment in the template file
-mentions `envsubst`, but the implementation uses `sed -e ... -e ...`.
+**Why both bindings?** Kubernetes evaluates impersonation against the
+cluster-scoped virtual resource `users`, which a `RoleBinding` cannot
+grant. Without the second binding, mirrord's WebSocket handshake to the
+agent pod gets a `403 Forbidden`. See
+`admin-runbook.md § Why two bindings` for the API-server-level
+mechanics.
 
-**RoleBinding name:** `mirrord-developer-<user>` — unique per user,
-scoped to the namespace. If the same user is granted access to multiple
-namespaces, each gets its own RoleBinding resource with the same name
-but in a different namespace.
+**Binding names:**
+
+- `RoleBinding/mirrord-developer-<user>` — unique per user inside the
+  namespace; multiple namespaces each get their own.
+- `ClusterRoleBinding/mirrord-impersonator-<user>` — one per user, no
+  matter how many namespaces they're bound to.
 
 ## `revoke-namespace-access.sh`
 
-**Purpose:** Remove a single RoleBinding, testing that authorization
-revokes instantly.
+**Purpose:** Revoke a developer's mirrord access in one namespace. Deletes
+the namespace `RoleBinding` and, if it was the last one, the cluster
+impersonation binding too.
 
 **Flow:**
 
 1. **Pre-flight:** Same username/namespace validation.
-2. **Delete:** `kubectl delete rolebinding` with `--ignore-not-found`
-   (safe to call when the binding was already removed).
-3. **Verify:** `kubectl auth can-i list pods --as=<user>` — must return
-   failure. If it succeeds, the script exits with an error, indicating
-   a stale binding or a duplicate binding elsewhere.
+2. **Delete the namespace RoleBinding:** `kubectl delete rolebinding
+   mirrord-developer-<user> -n <ns>` with `--ignore-not-found`.
+3. **Conditionally delete the impersonator ClusterRoleBinding:** Count
+   remaining `RoleBinding`s labeled
+   `mirrord-rbac-demo/user=<user>` cluster-wide. If zero, delete
+   `ClusterRoleBinding/mirrord-impersonator-<user>`. Otherwise leave it
+   — the user still has access to at least one namespace and revoking
+   cluster-scoped impersonation would break mirrord *there*.
+4. **Verify:** `kubectl auth can-i list pods --as=<user> -n <ns>` must
+   return failure. If it succeeds, the script exits with an error,
+   indicating a stale binding or a duplicate binding elsewhere.
 
 **What it does NOT do:** It does not delete the user's certificate.
 The user can still authenticate to the API server, but all RBAC checks
@@ -312,18 +362,23 @@ end-to-end. Safe to run after any script modification.
 
 | Step | Action | Assertions |
 |---|---|---|
-| 1/5 | `bootstrap-cluster.sh` | (implicit: script succeeds, cluster exists) |
-| 2/5 | `issue-developer-kubeconfig.sh alice` | Cert authenticates as "alice"; denied in both namespaces |
-| 3/5 | `grant-namespace-access.sh alice team-a-dev` | Allowed 6 operations in team-a-dev; denied 3 operations in team-b-dev |
+| 1/5 | `bootstrap-cluster.sh` | (implicit: script succeeds, cluster exists, both ClusterRoles applied) |
+| 2/5 | `issue-developer-kubeconfig.sh alice` | Cert authenticates as "alice"; denied in both namespaces; denied cluster-scoped impersonate |
+| 3/5 | `grant-namespace-access.sh alice team-a-dev` | 6 namespace verbs allowed in team-a-dev; cluster-scoped `impersonate serviceaccounts` allowed; 3 verbs denied in team-b-dev |
 | 4/5 | `mirrord ls` (optional) | Lists `deployment/echo` in team-a-dev; forbidden in team-b-dev |
-| 5/5 | `revoke-namespace-access.sh alice team-a-dev` | Denied again in team-a-dev |
+| 5/5 | `revoke-namespace-access.sh alice team-a-dev` | Denied again in team-a-dev; denied cluster-scoped impersonate (last RoleBinding was revoked, so the ClusterRoleBinding also got cleaned up) |
 
 **Assertion helpers:**
 
-- `assert_allowed(kubeconfig, verb, namespace)` — `kubectl auth can-i`
-  must **succeed**. Dies with error message on failure.
-- `assert_denied(kubeconfig, verb, namespace)` — `kubectl auth can-i`
-  must **fail**. Dies with error message on success.
+- `assert_allowed(kubeconfig, verb, namespace)` — `kubectl auth can-i
+  <verb> -n <namespace>` must **succeed**. Dies on failure.
+- `assert_denied(kubeconfig, verb, namespace)` — same but must **fail**.
+- `assert_allowed_cluster(kubeconfig, verb)` — `kubectl auth can-i
+  <verb>` with no `-n` must **succeed**. Used for the cluster-scoped
+  impersonation check that the per-user `ClusterRoleBinding` satisfies.
+- `assert_denied_cluster(kubeconfig, verb)` — same but must **fail**.
+  Used to confirm that before grant and after the last revoke, alice
+  has no cluster-scoped impersonate.
 
 **Mirrord check:** Steps 4/5 is gated on whether `mirrord` is on PATH.
 If not installed, the script skips it (doesn't fail). The mirrord CLI

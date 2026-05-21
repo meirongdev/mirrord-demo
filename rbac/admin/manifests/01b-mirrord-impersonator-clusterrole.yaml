@@ -1,0 +1,17 @@
+# ClusterRole: minimal permissions for mirrord's impersonation requirement.
+# mirrord needs to impersonate the target pod's ServiceAccount to establish
+# the WebSocket tunnel between the local process and the agent pod.
+# This is a cluster-scoped operation that cannot be satisfied by a
+# namespace-scoped RoleBinding alone.
+#
+# One per-user ClusterRoleBinding will be created in grant-namespace-access.sh.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mirrord-impersonator
+  labels:
+    app.kubernetes.io/part-of: mirrord-rbac-demo
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "impersonate"]

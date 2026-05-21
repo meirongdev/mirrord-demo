@@ -81,16 +81,25 @@ kind cluster, but the RBAC pattern transfers directly to k3s / EKS / GKE.
                                                             without losing her identity
 ```
 
-Three primitives do all the work:
+Four primitives do all the work:
 
 | Primitive | Owner | Scope | Purpose |
 |---|---|---|---|
-| `ClusterRole/mirrord-developer` | admin | cluster-wide definition | the *capability* (what verbs mirrord-agent needs) |
+| `ClusterRole/mirrord-developer` | admin | cluster-wide definition | the *capability* — every verb mirrord-agent needs inside a namespace |
+| `ClusterRole/mirrord-impersonator` | admin | cluster-wide definition | the *one* cluster-scoped verb (`serviceaccounts: impersonate`) mirrord's WebSocket handshake requires — narrowly scoped, nothing else |
 | client cert + kubeconfig | admin issues, developer holds | per-user | the *identity* |
-| `RoleBinding` | admin | namespace | the *grant* — binds an identity to the capability inside one namespace |
+| `RoleBinding` + per-user `ClusterRoleBinding` | admin | one per namespace + one per user | the *grant* — `RoleBinding` for the namespace-scoped capability, narrow `ClusterRoleBinding` to satisfy the cluster-scoped impersonation check |
 
 A developer with a kubeconfig but no `RoleBinding` is authenticated but
 authorized for nothing. That's the default-deny posture.
+
+> **Why two bindings?** Kubernetes evaluates impersonation against a
+> cluster-scoped virtual resource (`users`), which a `RoleBinding`
+> physically cannot grant. So mirrord's permissions split by scope:
+> the bulk lives in a per-namespace `RoleBinding`, and one tiny
+> cluster-scoped binding handles the impersonation step. See
+> [admin-runbook § Why two bindings](docs/admin-runbook.md#why-two-bindings)
+> for the API-server-level details.
 
 ## Layout
 
@@ -104,12 +113,14 @@ rbac/
 ├── admin/
 │   ├── kind-config.yaml
 │   ├── manifests/
-│   │   ├── 01-mirrord-developer-clusterrole.yaml   ← ClusterRole definition
-│   │   ├── 02-namespaces.yaml                       ← team-a-dev, team-b-dev
-│   │   ├── 03-test-workloads.yaml                   ← echo server (quick test)
-│   │   ├── 04-mysql-template.yaml                   ← MySQL per namespace (template)
-│   │   ├── 05-app-template.yaml                     ← Spring Boot app per namespace (template)
-│   │   └── 04-rolebinding-template.yaml             ← RoleBinding template
+│   │   ├── 01-mirrord-developer-clusterrole.yaml        ← ClusterRole (namespace-scoped verbs)
+│   │   ├── 01b-mirrord-impersonator-clusterrole.yaml    ← ClusterRole (impersonate only, 1 rule)
+│   │   ├── 02-namespaces.yaml                            ← team-a-dev, team-b-dev
+│   │   ├── 03-test-workloads.yaml                        ← echo server (quick test)
+│   │   ├── 04-mysql-template.yaml                        ← MySQL per namespace (template)
+│   │   ├── 04-rolebinding-template.yaml                  ← per-namespace RoleBinding template
+│   │   ├── 04b-mirrord-impersonator-rolebinding.yaml     ← per-user ClusterRoleBinding template
+│   │   └── 05-app-template.yaml                          ← Spring Boot app per namespace (template)
 │   └── scripts/
 │       ├── bootstrap-cluster.sh                     ← one-command cluster setup
 │       ├── issue-developer-kubeconfig.sh            ← CSR-based kubeconfig issuance
@@ -198,8 +209,12 @@ The pattern in this demo:
   and centrally reviewed.
 - Each developer–namespace pairing is a separate **RoleBinding**.
   Granting access is one `kubectl apply`; revoking is one `kubectl delete`.
-- No `ClusterRoleBinding` is used. A developer can never gain mirrord
-  rights across the whole cluster by accident.
+- The **one** `ClusterRoleBinding` per user is the narrowest possible:
+  it points at a `ClusterRole` with a single rule (impersonate
+  serviceaccounts) — required by mirrord's WebSocket handshake, and not
+  satisfiable by a RoleBinding because Kubernetes evaluates that check
+  against a cluster-scoped virtual resource (`users`). A developer
+  never gains pod/job/log/portforward rights cluster-wide.
 
 You can swap the K8s CSR-issued cert for whatever your IDP gives you
 (OIDC `sub`, SA token, etc.) — only the `subjects:` field of the

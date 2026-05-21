@@ -39,6 +39,24 @@ assert_denied() {
   echo "  OK  denied:  ${verb} in ${ns}"
 }
 
+assert_allowed_cluster() {
+  local kubeconfig="$1" verb="$2"
+  # shellcheck disable=SC2086
+  if ! KUBECONFIG="$kubeconfig" kubectl auth can-i $verb >/dev/null 2>&1; then
+    die "expected ${USER_NAME} to be allowed to '${verb}' cluster-wide, but was denied"
+  fi
+  echo "  OK  allowed: ${verb} cluster-wide"
+}
+
+assert_denied_cluster() {
+  local kubeconfig="$1" verb="$2"
+  # shellcheck disable=SC2086
+  if KUBECONFIG="$kubeconfig" kubectl auth can-i $verb >/dev/null 2>&1; then
+    die "expected ${USER_NAME} to be denied '${verb}' cluster-wide, but was allowed"
+  fi
+  echo "  OK  denied:  ${verb} cluster-wide"
+}
+
 ###############################################################################
 log "Step 1/5  Admin bootstraps cluster + ClusterRole + namespaces + workloads"
 ###############################################################################
@@ -59,6 +77,7 @@ log "authenticated as ${identity}"
 log "before any binding: ${USER_NAME} must be denied everywhere"
 assert_denied "$USER_KUBECONFIG" "list pods" "$ALLOWED_NS"
 assert_denied "$USER_KUBECONFIG" "list pods" "$DENIED_NS"
+assert_denied_cluster "$USER_KUBECONFIG" "impersonate serviceaccounts"
 
 ###############################################################################
 log "Step 3/5  Admin grants ${USER_NAME} access to ${ALLOWED_NS} only"
@@ -72,6 +91,12 @@ assert_allowed "$USER_KUBECONFIG" "create jobs.batch" "$ALLOWED_NS"
 assert_allowed "$USER_KUBECONFIG" "create pods" "$ALLOWED_NS"
 assert_allowed "$USER_KUBECONFIG" "get pods/log" "$ALLOWED_NS"
 assert_allowed "$USER_KUBECONFIG" "create pods/portforward" "$ALLOWED_NS"
+
+# mirrord's agent WebSocket handshake impersonates the target pod's SA.
+# That check is cluster-scoped; the per-namespace RoleBinding is not
+# enough. The impersonator ClusterRoleBinding from grant-namespace-access.sh
+# is what makes this pass.
+assert_allowed_cluster "$USER_KUBECONFIG" "impersonate serviceaccounts"
 
 log "${USER_NAME} should still be denied EVERYTHING in ${DENIED_NS}"
 assert_denied "$USER_KUBECONFIG" "list pods" "$DENIED_NS"
@@ -103,5 +128,9 @@ log "Step 5/5  Admin revokes the binding — deny-by-default returns"
 bash "${RBAC_ROOT}/admin/scripts/revoke-namespace-access.sh" "$USER_NAME" "$ALLOWED_NS"
 assert_denied "$USER_KUBECONFIG" "list pods" "$ALLOWED_NS"
 assert_denied "$USER_KUBECONFIG" "create jobs.batch" "$ALLOWED_NS"
+# Revoke removes the impersonator ClusterRoleBinding only when no other
+# RoleBindings remain — alice had only one, so cluster-scoped impersonate
+# should be gone too.
+assert_denied_cluster "$USER_KUBECONFIG" "impersonate serviceaccounts"
 
 log "All RBAC assertions passed."

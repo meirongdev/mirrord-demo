@@ -118,6 +118,18 @@ That's working as intended.
   `pod-security.kubernetes.io/enforce=privileged` label. Either the
   admin needs to apply that label, or the namespace is intentionally
   baseline/restricted and mirrord won't work there.
+- **`failed to upgrade to a WebSocket connection: failed to switch
+  protocol: 403 Forbidden`.** The agent pod was created successfully
+  but the tunnel handshake is being rejected. This means the per-user
+  `ClusterRoleBinding/mirrord-impersonator-<you>` is missing — mirrord
+  needs cluster-scoped `serviceaccounts: impersonate`, which a
+  namespace `RoleBinding` cannot satisfy. Ask the admin to re-run
+  `grant-namespace-access.sh <you> <namespace>`; the current version of
+  the script applies both bindings. You can sanity-check with:
+  ```bash
+  kubectl auth can-i impersonate serviceaccounts   # → yes (cluster-scoped, no -n)
+  ```
+  If that returns `no`, the impersonator binding is missing.
 - **`kubectl auth whoami` returns `system:anonymous`.** Your kubeconfig
   path is wrong, the cert in it is corrupt, or you're connecting to a
   different cluster. Confirm `KUBECONFIG` is set to the file the admin

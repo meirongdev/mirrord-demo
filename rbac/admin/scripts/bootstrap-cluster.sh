@@ -9,6 +9,9 @@ require_cmd kind kubectl
 ensure_kind_cluster
 apply_admin_manifests
 
+log "Applying mirrord-impersonator ClusterRole (cluster-scoped)"
+kubectl --context "$KIND_CONTEXT" apply -f "${RBAC_ROOT}/admin/manifests/01b-mirrord-impersonator-clusterrole.yaml"
+
 log "Bootstrap complete. Next steps:"
 cat <<EOF
 
