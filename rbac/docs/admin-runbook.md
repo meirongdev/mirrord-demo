@@ -404,6 +404,87 @@ All RBAC assertions passed.
 
 ---
 
+## Cleaning up stale mirrord agents
+
+Every mirrord session spawns a `Job` in the target namespace named
+`mirrord-agent-<random>`, with a single pod carrying the label
+`app=mirrord`. The mirrord client sets `ttlSecondsAfterFinished` on
+the Job (the exact value depends on your mirrord version — confirm
+with `kubectl -n team-a-dev get job mirrord-agent-... -o jsonpath='{.spec.ttlSecondsAfterFinished}'`),
+so under a clean exit the API server garbage-collects the Job that
+many seconds after it reaches a terminal state. With the developer
+config in this repo (`agent.ttl: 30`), the agent itself exits 30 s
+after the last client disconnects. End-to-end graceful teardown is
+therefore `agent.ttl + ttlSecondsAfterFinished` — on our current
+setup that's ~**60 s**.
+
+Agents leak when the client exits ungracefully — VS Code closed
+mid-debug, laptop sleeps, network drops, `mirrord exec` SIGKILLed. The
+Job never reaches `Complete`, so `ttlSecondsAfterFinished` never fires
+and the agent pod stays `Running` indefinitely. On a sandbox cluster
+they're harmless but they burn CPU/memory and squat the port-forward.
+
+### Find them
+
+```bash
+# Per-namespace
+kubectl -n team-a-dev get jobs,pods -l app=mirrord
+
+# Cluster-wide
+kubectl get jobs -A -l app=mirrord
+kubectl get pods -A -l app=mirrord
+```
+
+Anything older than the longest debug session you'd plausibly run
+(say 30 min) is almost certainly orphaned.
+
+### Delete one
+
+```bash
+kubectl -n team-a-dev delete job mirrord-agent-<random>
+```
+
+Deleting the `Job` cascades to its pod via owner reference — no manual
+pod cleanup needed.
+
+### Bulk cleanup — one namespace
+
+```bash
+kubectl -n team-a-dev delete jobs -l app=mirrord
+```
+
+### Bulk cleanup — all namespaces
+
+```bash
+kubectl get jobs -A -l app=mirrord \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
+  | xargs -L1 sh -c 'kubectl -n "$0" delete job "$1"'
+```
+
+### Notes
+
+- **Developers can clean up their own leaks.** The
+  `mirrord-developer` ClusterRole already grants `jobs: delete` and
+  `pods: delete` in granted namespaces, so the same commands above work
+  with a developer's scoped kubeconfig — no admin intervention required
+  for routine cases.
+- **`AlreadyExists` on Job create (rare).** mirrord normally gives
+  each agent Job a random suffix, so two concurrent sessions don't
+  collide. A 409 on Job create therefore points to either an exact
+  name collision (extremely unlikely) or a mirrord version that
+  derives the suffix deterministically from the target. If you do
+  hit it, list `app=mirrord` Jobs in the target namespace and delete
+  the offender — but don't reflexively blame "stale Jobs" for any
+  random 409.
+- **`agent.ttl` vs `ttlSecondsAfterFinished`.** They're different
+  timers. `agent.ttl` (mirrord client config) tells the *agent process*
+  how long to wait for a reconnect before exiting. `ttlSecondsAfterFinished`
+  (on the Job) is the Kubernetes garbage-collector window after the Job
+  reaches a terminal state. The agent must exit first; the Job TTL only
+  applies after that.
+
+---
+
 <a id="why-clusterrole-needs-these-permissions"></a>
 
 ## Why ClusterRole needs these permissions
